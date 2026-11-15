@@ -199,7 +199,7 @@ function Get-SensitiveTermCount([string]$Path) {
 # Creates the terms file seeded with this machine's identifying values, readable
 # only by the current user. Never overwrites an existing file. Returns the number
 # of seeded terms (values are not returned or printed).
-function New-SensitiveTermsFile {
+function Initialize-SensitiveTermsFile {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (Test-Path $Path) { return 0 }
     $ErrorActionPreference = 'Continue'
@@ -352,4 +352,4 @@ function Get-WorkstationStatus {
     $results
 }
 
-Export-ModuleMember -Function Get-ClaudePath, Import-WorkstationConfig, Sync-SessionPath, Test-CommandExist, Get-GhTokenScope, Test-GhSignedIn, Get-VSCodeExtension, Expand-ConfigPath, Get-SkillRepo, Test-SyncHookInstalled, Register-SyncHook, Get-MissingDenyRule, Register-DenyRule, Get-SensitiveTermCount, New-SensitiveTermsFile, Get-WorkstationStatus
+Export-ModuleMember -Function Get-ClaudePath, Import-WorkstationConfig, Sync-SessionPath, Test-CommandExist, Get-GhTokenScope, Test-GhSignedIn, Get-VSCodeExtension, Expand-ConfigPath, Get-SkillRepo, Test-SyncHookInstalled, Register-SyncHook, Get-MissingDenyRule, Register-DenyRule, Get-SensitiveTermCount, Initialize-SensitiveTermsFile, Get-WorkstationStatus

@@ -198,7 +198,7 @@ if ($claudeCfg) {
         $termsPath = Expand-ConfigPath $claudeCfg.sensitiveTermsFile
         if (Test-Path $termsPath) { Write-Skip 'private terms file' }
         elseif ($PSCmdlet.ShouldProcess($termsPath, 'Create private terms file (current user only)')) {
-            $n = New-SensitiveTermsFile -Path $termsPath
+            $n = Initialize-SensitiveTermsFile -Path $termsPath
             Write-Host "    created with $n seeded term(s). Add your hostnames, local domain and network names:" -ForegroundColor Yellow
             Write-Host "    notepad `"$termsPath`"" -ForegroundColor Yellow
         }
