@@ -1,0 +1,25 @@
+# gitleaks config: the default secret rules plus infrastructure details that
+# shouldn't appear in a public repo (see skills/public-repo-hygiene).
+title = "workstation-setup gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "private-ipv4-address"
+description = "Private or internal IPv4 address"
+regex = '''(?:^|[^0-9.])((?:10(?:\.[0-9]{1,3}){3})|(?:192\.168(?:\.[0-9]{1,3}){2})|(?:172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2}))(?:[^0-9.]|$)'''
+secretGroup = 1
+tags = ["infrastructure"]
+
+[[rules]]
+id = "mac-address"
+description = "Hardware MAC address"
+regex = '''(?:^|[^0-9A-Fa-f:-])([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5})(?:[^0-9A-Fa-f:-]|$)'''
+secretGroup = 1
+tags = ["infrastructure"]
+
+[allowlist]
+description = "Lines a person reviewed and marked as a deliberate example"
+regexTarget = "line"
+regexes = ['''hygiene:\s*allow''']

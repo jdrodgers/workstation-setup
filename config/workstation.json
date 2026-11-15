@@ -17,10 +17,44 @@
     "requiredScopes": ["repo", "workflow", "read:org"]
   },
 
-  "aiSkills": {
-    "enabled": true,
-    "repo": "jdrodgers/ai-skills",
-    "clonePath": "c:\\code\\ai-skills",
-    "mainWorktreePath": "c:\\code\\ai-skills-main"
+  "skillRepos": [
+    {
+      "name": "ai-skills",
+      "repo": "jdrodgers/ai-skills",
+      "clonePath": "c:\\code\\ai-skills",
+      "mainWorktreePath": "c:\\code\\ai-skills-main",
+      "localMainGuard": false
+    },
+    {
+      "name": "ai-skills-private",
+      "repo": "jdrodgers/ai-skills-private",
+      "clonePath": "c:\\code\\ai-skills-private",
+      "mainWorktreePath": "c:\\code\\ai-skills-private-main",
+      "localMainGuard": true
+    }
+  ],
+
+  "claude": {
+    "sensitiveTermsFile": "%USERPROFILE%\\.config\\ai-skills\\sensitive-terms.txt",
+    "denyRules": [
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.azure/**)",
+      "Read(~/.kube/**)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.config/gh/**)",
+      "Read(~/AppData/Roaming/GitHub CLI/**)",
+      "Read(~/.config/ai-skills/**)",
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.production)",
+      "Read(**/config.local.json)",
+      "Read(**/secrets.yaml)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.pfx)",
+      "Read(**/*.p12)"
+    ]
   }
 }
