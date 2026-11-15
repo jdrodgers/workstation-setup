@@ -72,59 +72,153 @@ function Get-GhTokenScope {
         ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
-function Test-SyncHookInstalled {
-    param([string]$SettingsPath = $script:ClaudeSettings)
-    if (-not (Test-Path $SettingsPath)) { return $false }
-    try { $settings = Get-Content -Raw $SettingsPath | ConvertFrom-Json } catch { return $false }
-    if (-not $settings -or -not ($settings.PSObject.Properties.Name -contains 'hooks')) { return $false }
-    if (-not ($settings.hooks.PSObject.Properties.Name -contains 'SessionStart')) { return $false }
-    foreach ($entry in @($settings.hooks.SessionStart)) {
-        foreach ($hook in @($entry.hooks)) {
-            $text = "$($hook.command) $(@($hook.args) -join ' ')"
-            if ($text -like '*sync-ai-skills.ps1*') { return $true }
+# --- Config helpers -----------------------------------------------------------
+
+function Expand-ConfigPath([string]$Path) { [Environment]::ExpandEnvironmentVariables($Path) }
+
+# The skill repos from config, with paths expanded.
+function Get-SkillRepo {
+    param([Parameter(Mandatory = $true)]$Config)
+    foreach ($r in @($Config.skillRepos)) {
+        if (-not $r) { continue }
+        [pscustomobject]@{
+            Name           = $r.name
+            Repo           = $r.repo
+            Clone          = Expand-ConfigPath $r.clonePath
+            Worktree       = Expand-ConfigPath $r.mainWorktreePath
+            LocalMainGuard = ($r.localMainGuard -eq $true)
         }
+    }
+}
+
+# --- Claude Code settings.json --------------------------------------------------
+
+function Read-ClaudeSetting([string]$SettingsPath) {
+    if (-not (Test-Path $SettingsPath)) { return $null }
+    $raw = Get-Content -Raw $SettingsPath
+    if (-not $raw -or -not $raw.Trim()) { return (New-Object psobject) }
+    try { $raw | ConvertFrom-Json }
+    catch { throw "$SettingsPath is not valid JSON; fix it by hand, then re-run. ($($_.Exception.Message))" }
+}
+
+function Save-ClaudeSetting([string]$SettingsPath, $Settings) {
+    if (Test-Path $SettingsPath) { Copy-Item $SettingsPath "$SettingsPath.bak" -Force }
+    New-Item -ItemType Directory -Force -Path (Split-Path $SettingsPath) | Out-Null
+    $json = $Settings | ConvertTo-Json -Depth 32
+    [IO.File]::WriteAllText($SettingsPath, $json, (New-Object Text.UTF8Encoding $false))
+}
+
+function Add-MissingProperty($Object, [string]$Name, $Value) {
+    if (-not ($Object.PSObject.Properties.Name -contains $Name)) {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+}
+
+function Test-IsSyncHookEntry($Entry) {
+    foreach ($hook in @($Entry.hooks)) {
+        if ("$($hook.command) $(@($hook.args) -join ' ')" -like '*sync-ai-skills.ps1*') { return $true }
     }
     $false
 }
 
-# Adds the ai-skills SessionStart hook to a Claude Code settings.json, keeping every
-# existing setting and hook. Writes a .bak copy first. Throws (and writes nothing)
-# if the existing file isn't valid JSON.
+# True when a SessionStart hook runs the sync script for every given repo path.
+function Test-SyncHookInstalled {
+    param([string]$SettingsPath = $script:ClaudeSettings, [string[]]$RepoPaths = @())
+    try { $settings = Read-ClaudeSetting $SettingsPath } catch { return $false }
+    if (-not $settings -or -not ($settings.PSObject.Properties.Name -contains 'hooks')) { return $false }
+    if (-not ($settings.hooks.PSObject.Properties.Name -contains 'SessionStart')) { return $false }
+    foreach ($entry in @($settings.hooks.SessionStart)) {
+        if (-not (Test-IsSyncHookEntry $entry)) { continue }
+        $text = (@($entry.hooks) | ForEach-Object { @($_.args) -join ' ' }) -join ' '
+        $missing = @($RepoPaths | Where-Object { $text.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -lt 0 })
+        if ($missing.Count -eq 0) { return $true }
+    }
+    $false
+}
+
+# Sets the ai-skills SessionStart hook in a Claude Code settings.json: removes any
+# older sync hook entry, adds one for the given repos, and keeps every other setting
+# and hook. Writes a .bak copy first; throws (writing nothing) on invalid JSON.
 function Register-SyncHook {
     param(
         [Parameter(Mandatory = $true)][string]$SettingsPath,
         [Parameter(Mandatory = $true)][string]$SyncScript,
-        [Parameter(Mandatory = $true)][string]$Repo
+        [Parameter(Mandatory = $true)][string[]]$Repo
     )
-    $settings = New-Object psobject
-    if (Test-Path $SettingsPath) {
-        $raw = Get-Content -Raw $SettingsPath
-        if ($raw -and $raw.Trim()) {
-            try { $settings = $raw | ConvertFrom-Json }
-            catch { throw "$SettingsPath is not valid JSON; fix it by hand, then re-run. ($($_.Exception.Message))" }
-        }
-        Copy-Item $SettingsPath "$SettingsPath.bak" -Force
-    }
-    if (-not ($settings.PSObject.Properties.Name -contains 'hooks')) {
-        $settings | Add-Member -NotePropertyName hooks -NotePropertyValue (New-Object psobject)
-    }
-    if (-not ($settings.hooks.PSObject.Properties.Name -contains 'SessionStart')) {
-        $settings.hooks | Add-Member -NotePropertyName SessionStart -NotePropertyValue @()
-    }
+    $settings = Read-ClaudeSetting $SettingsPath
+    if ($null -eq $settings) { $settings = New-Object psobject }
+    Add-MissingProperty $settings 'hooks' (New-Object psobject)
+    Add-MissingProperty $settings.hooks 'SessionStart' @()
     $entry = [pscustomobject]@{
         matcher = 'startup'
         hooks   = @([pscustomobject]@{
             type          = 'command'
             command       = 'powershell.exe'
-            args          = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SyncScript, '-Repo', $Repo)
+            args          = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SyncScript, '-Repo', ($Repo -join ';'))
             timeout       = 30
-            statusMessage = 'Syncing ai-skills from main'
+            statusMessage = 'Syncing skills from main'
         })
     }
-    $settings.hooks.SessionStart = @($settings.hooks.SessionStart) + $entry
-    $json = $settings | ConvertTo-Json -Depth 32
-    New-Item -ItemType Directory -Force -Path (Split-Path $SettingsPath) | Out-Null
-    [IO.File]::WriteAllText($SettingsPath, $json, (New-Object Text.UTF8Encoding $false))
+    $kept = @(@($settings.hooks.SessionStart) | Where-Object { $_ -and -not (Test-IsSyncHookEntry $_) })
+    $settings.hooks.SessionStart = $kept + $entry
+    Save-ClaudeSetting $SettingsPath $settings
+}
+
+# Deny rules from config that are not yet in settings.json permissions.deny.
+function Get-MissingDenyRule {
+    param([string]$SettingsPath = $script:ClaudeSettings, [string[]]$Rules = @())
+    $have = @()
+    try { $settings = Read-ClaudeSetting $SettingsPath } catch { return $Rules }
+    if ($settings -and ($settings.PSObject.Properties.Name -contains 'permissions') -and
+        ($settings.permissions.PSObject.Properties.Name -contains 'deny')) {
+        $have = @($settings.permissions.deny)
+    }
+    @($Rules | Where-Object { $have -notcontains $_ })
+}
+
+# Adds deny rules to permissions.deny, keeping existing allow/deny/ask rules.
+function Register-DenyRule {
+    param([Parameter(Mandatory = $true)][string]$SettingsPath, [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Rules)
+    if (-not $Rules -or $Rules.Count -eq 0) { return }
+    $settings = Read-ClaudeSetting $SettingsPath
+    if ($null -eq $settings) { $settings = New-Object psobject }
+    Add-MissingProperty $settings 'permissions' (New-Object psobject)
+    Add-MissingProperty $settings.permissions 'deny' @()
+    $current = @($settings.permissions.deny)
+    $settings.permissions.deny = $current + @($Rules | Where-Object { $current -notcontains $_ })
+    Save-ClaudeSetting $SettingsPath $settings
+}
+
+# --- Private sensitive-terms file (read by the public-repo-hygiene scanner) ---
+
+function Get-SensitiveTermCount([string]$Path) {
+    if (-not (Test-Path $Path)) { return -1 }
+    @(Get-Content $Path | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') }).Count
+}
+
+# Creates the terms file seeded with this machine's identifying values, readable
+# only by the current user. Never overwrites an existing file. Returns the number
+# of seeded terms (values are not returned or printed).
+function New-SensitiveTermsFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (Test-Path $Path) { return 0 }
+    $ErrorActionPreference = 'Continue'
+    $seed = New-Object System.Collections.Generic.List[string]
+    foreach ($v in @($env:USERNAME, $env:COMPUTERNAME)) { if ($v -and $v.Length -ge 3) { $seed.Add($v) } }
+    if (Test-CommandExist 'git') {
+        $email = git config --global --get user.email 2>$null
+        if ($email) { $seed.Add("$email".Trim()) }
+    }
+    $header = @(
+        '# Private terms for the public-repo-hygiene scanner. One per line; prefix re: for a regex.',
+        '# Add your hostnames, local domain, network names, device names, and anything else',
+        '# that identifies your environment. This file must never be committed or shared,',
+        '# and AI agents are denied from reading it.',
+        '')
+    New-Item -ItemType Directory -Force -Path (Split-Path $Path) | Out-Null
+    [IO.File]::WriteAllLines($Path, [string[]]($header + $seed), (New-Object Text.UTF8Encoding $false))
+    & icacls $Path /inheritance:r /grant:r "${env:USERNAME}:(F)" | Out-Null
+    $seed.Count
 }
 
 function Get-WorkstationStatus {
@@ -199,37 +293,63 @@ function Get-WorkstationStatus {
     if (Test-Path $codeRoot -PathType Container) { $results.Add((Get-CheckResult 'Folders' 'Code root' 'Pass' $codeRoot)) }
     else { $results.Add((Get-CheckResult 'Folders' 'Code root' 'Fail' "$codeRoot does not exist" "New-Item -ItemType Directory $codeRoot")) }
 
-    # --- ai-skills ---
-    $ai = $Config.aiSkills
-    if ($ai -and $ai.enabled) {
-        $clone    = [Environment]::ExpandEnvironmentVariables($ai.clonePath)
-        $worktree = [Environment]::ExpandEnvironmentVariables($ai.mainWorktreePath)
-
-        if (Test-Path (Join-Path $clone '.git')) { $results.Add((Get-CheckResult 'ai-skills' 'Working clone' 'Pass' $clone)) }
-        else { $results.Add((Get-CheckResult 'ai-skills' 'Working clone' 'Fail' "$clone not found" $installHint)) }
+    # --- Skill repos ---
+    $repos = @(Get-SkillRepo -Config $Config)
+    foreach ($r in $repos) {
+        $area = $r.Name
+        if (Test-Path (Join-Path $r.Clone '.git')) { $results.Add((Get-CheckResult $area 'Working clone' 'Pass' $r.Clone)) }
+        else { $results.Add((Get-CheckResult $area 'Working clone' 'Fail' "$($r.Clone) not found" $installHint)) }
 
         $branch = $null
-        if ($hasGit -and (Test-Path $worktree)) { $branch = git -C $worktree branch --show-current 2>$null }
-        if ($branch -eq 'main') { $results.Add((Get-CheckResult 'ai-skills' 'main worktree' 'Pass' $worktree)) }
-        elseif ($branch) { $results.Add((Get-CheckResult 'ai-skills' 'main worktree' 'Fail' "$worktree is on '$branch', expected main" "git -C $worktree switch main")) }
-        else { $results.Add((Get-CheckResult 'ai-skills' 'main worktree' 'Fail' "$worktree not found" $installHint)) }
+        if ($hasGit -and (Test-Path $r.Worktree)) { $branch = git -C $r.Worktree branch --show-current 2>$null }
+        if ($branch -eq 'main') { $results.Add((Get-CheckResult $area 'main worktree' 'Pass' $r.Worktree)) }
+        elseif ($branch) { $results.Add((Get-CheckResult $area 'main worktree' 'Fail' "$($r.Worktree) is on '$branch', expected main" "git -C $($r.Worktree) switch main")) }
+        else { $results.Add((Get-CheckResult $area 'main worktree' 'Fail' "$($r.Worktree) not found" $installHint)) }
 
-        if (Test-Path $script:SyncScriptPath) { $results.Add((Get-CheckResult 'ai-skills' 'Sync script' 'Pass' $script:SyncScriptPath)) }
-        else { $results.Add((Get-CheckResult 'ai-skills' 'Sync script' 'Fail' 'Not installed' $installHint)) }
+        if ($r.LocalMainGuard -and $hasGit -and (Test-Path (Join-Path $r.Clone '.git'))) {
+            $hooksPath = git -C $r.Clone config --get core.hooksPath 2>$null
+            $guardFile = Join-Path $r.Clone 'hooks\pre-push'
+            if ($hooksPath -ne 'hooks') { $results.Add((Get-CheckResult $area 'Push guard on main' 'Fail' 'core.hooksPath not set; pushes to main are not blocked' "git -C $($r.Clone) config core.hooksPath hooks")) }
+            elseif (-not (Test-Path $guardFile)) { $results.Add((Get-CheckResult $area 'Push guard on main' 'Warn' 'Enabled, but hooks/pre-push is not in this checkout')) }
+            else { $results.Add((Get-CheckResult $area 'Push guard on main' 'Pass' 'pre-push blocks main')) }
+        }
 
-        if (Test-SyncHookInstalled) { $results.Add((Get-CheckResult 'ai-skills' 'SessionStart hook' 'Pass' $script:ClaudeSettings)) }
-        else { $results.Add((Get-CheckResult 'ai-skills' 'SessionStart hook' 'Fail' 'Not in ~/.claude/settings.json' $installHint)) }
-
-        $skillsSrc = Join-Path $worktree 'skills'
+        $skillsSrc = Join-Path $r.Worktree 'skills'
         if (Test-Path $skillsSrc) {
             $skills  = @(Get-ChildItem $skillsSrc -Directory)
             $missing = @($skills | Where-Object { -not (Test-Path (Join-Path $script:ClaudeSkills $_.Name)) })
-            if ($missing.Count -eq 0) { $results.Add((Get-CheckResult 'ai-skills' 'Skills linked' 'Pass' "$($skills.Count) skill(s)")) }
-            else { $results.Add((Get-CheckResult 'ai-skills' 'Skills linked' 'Warn' "Not linked yet: $(($missing | ForEach-Object Name) -join ', ')" "& '$script:SyncScriptPath'")) }
+            if ($missing.Count -eq 0) { $results.Add((Get-CheckResult $area 'Skills linked' 'Pass' "$($skills.Count) skill(s)")) }
+            else { $results.Add((Get-CheckResult $area 'Skills linked' 'Warn' "Not linked yet: $(($missing | ForEach-Object { $_.Name }) -join ', ')" "& '$script:SyncScriptPath' -Repo '$($r.Worktree)'")) }
+        }
+    }
+
+    # --- Claude Code ---
+    if ($repos.Count) {
+        if (Test-Path $script:SyncScriptPath) { $results.Add((Get-CheckResult 'Claude Code' 'Sync script' 'Pass' $script:SyncScriptPath)) }
+        else { $results.Add((Get-CheckResult 'Claude Code' 'Sync script' 'Fail' 'Not installed' $installHint)) }
+
+        if (Test-SyncHookInstalled -RepoPaths @($repos | ForEach-Object { $_.Worktree })) { $results.Add((Get-CheckResult 'Claude Code' 'SessionStart hook' 'Pass' "syncs $($repos.Count) repo(s)")) }
+        else { $results.Add((Get-CheckResult 'Claude Code' 'SessionStart hook' 'Fail' 'Missing, or not syncing every skill repo' $installHint)) }
+    }
+
+    $claude = $Config.claude
+    if ($claude) {
+        $rules = @($claude.denyRules)
+        if ($rules.Count) {
+            $missingRules = @(Get-MissingDenyRule -Rules $rules)
+            if ($missingRules.Count -eq 0) { $results.Add((Get-CheckResult 'Claude Code' 'Deny rules' 'Pass' "$($rules.Count) rule(s) in permissions.deny")) }
+            else { $results.Add((Get-CheckResult 'Claude Code' 'Deny rules' 'Fail' "$($missingRules.Count) of $($rules.Count) missing from permissions.deny" $installHint)) }
+        }
+        if ($claude.sensitiveTermsFile) {
+            $termsPath = Expand-ConfigPath $claude.sensitiveTermsFile
+            $count = Get-SensitiveTermCount $termsPath
+            if ($count -lt 0) { $results.Add((Get-CheckResult 'Claude Code' 'Private terms file' 'Fail' 'Not created' $installHint)) }
+            elseif ($count -le 3) { $results.Add((Get-CheckResult 'Claude Code' 'Private terms file' 'Warn' "$count term(s): add your hostnames, local domain and network names" "notepad `"$termsPath`"")) }
+            else { $results.Add((Get-CheckResult 'Claude Code' 'Private terms file' 'Pass' "$count term(s)")) }
         }
     }
 
     $results
 }
 
-Export-ModuleMember -Function Get-ClaudePath, Import-WorkstationConfig, Sync-SessionPath, Test-CommandExist, Get-GhTokenScope, Test-SyncHookInstalled, Register-SyncHook, Test-GhSignedIn, Get-VSCodeExtension, Get-WorkstationStatus
+Export-ModuleMember -Function Get-ClaudePath, Import-WorkstationConfig, Sync-SessionPath, Test-CommandExist, Get-GhTokenScope, Test-GhSignedIn, Get-VSCodeExtension, Expand-ConfigPath, Get-SkillRepo, Test-SyncHookInstalled, Register-SyncHook, Get-MissingDenyRule, Register-DenyRule, Get-SensitiveTermCount, New-SensitiveTermsFile, Get-WorkstationStatus

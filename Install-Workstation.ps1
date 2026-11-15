@@ -9,8 +9,11 @@
       3. Signs in to GitHub CLI (opens a browser) and adds missing token scopes
       4. Installs the VS Code extensions from config\workstation.json
       5. Creates the code root folder
-      6. Clones ai-skills, adds the main worktree, installs the sync script and
-         the Claude Code SessionStart hook (~/.claude/settings.json is backed up first)
+      6. Clones each skill repo (public ai-skills, private ai-skills-private), adds
+         its main worktree, and enables the local push guard where configured
+      7. Claude Code: installs the sync script and SessionStart hook, adds deny
+         rules for secret files, and creates the private terms file used by the
+         public-repo-hygiene scanner (~/.claude/settings.json is backed up first)
     Then runs Test-Workstation.ps1.
 
     Use -WhatIf to see what it would do without changing anything.
@@ -127,29 +130,39 @@ $codeRoot = [Environment]::ExpandEnvironmentVariables($config.codeRoot)
 if (Test-Path $codeRoot) { Write-Skip $codeRoot }
 elseif ($PSCmdlet.ShouldProcess($codeRoot, 'Create folder')) { New-Item -ItemType Directory -Path $codeRoot | Out-Null }
 
-# --- 6. ai-skills ---
-$ai = $config.aiSkills
-if ($ai -and $ai.enabled) {
-    Write-Step 'ai-skills'
-    $clone    = [Environment]::ExpandEnvironmentVariables($ai.clonePath)
-    $worktree = [Environment]::ExpandEnvironmentVariables($ai.mainWorktreePath)
+# --- 6. Skill repos ---
+$repos = @(Get-SkillRepo -Config $config)
+foreach ($r in $repos) {
+    Write-Step $r.Name
 
-    if (Test-Path (Join-Path $clone '.git')) { Write-Skip "clone at $clone" }
-    elseif ($PSCmdlet.ShouldProcess($clone, "gh repo clone $($ai.repo)")) {
-        Invoke-Native 'Cloning ai-skills' { gh repo clone $ai.repo $clone }
+    if (Test-Path (Join-Path $r.Clone '.git')) { Write-Skip "clone at $($r.Clone)" }
+    elseif ($PSCmdlet.ShouldProcess($r.Clone, "gh repo clone $($r.Repo)")) {
+        Invoke-Native "Cloning $($r.Repo)" { gh repo clone $r.Repo $r.Clone }
     }
 
-    if (Test-Path $worktree) { Write-Skip "main worktree at $worktree" }
-    elseif ($PSCmdlet.ShouldProcess($worktree, 'git worktree add (main)')) {
-        Invoke-Native 'git fetch' { git -C $clone fetch --quiet origin }
+    if (Test-Path $r.Worktree) { Write-Skip "main worktree at $($r.Worktree)" }
+    elseif ($PSCmdlet.ShouldProcess($r.Worktree, 'git worktree add (main)')) {
+        Invoke-Native 'git fetch' { git -C $r.Clone fetch --quiet origin }
         # main can only be checked out in one place, so move the working clone off it first.
-        if ((git -C $clone branch --show-current) -eq 'main') {
-            Invoke-Native 'Detaching working clone' { git -C $clone switch --quiet --detach origin/main }
+        if ((git -C $r.Clone branch --show-current) -eq 'main') {
+            Invoke-Native 'Detaching working clone' { git -C $r.Clone switch --quiet --detach origin/main }
         }
-        Invoke-Native 'git worktree add' { git -C $clone worktree add $worktree main }
-        Invoke-Native 'Setting upstream' { git -C $worktree branch --quiet --set-upstream-to=origin/main main }
+        Invoke-Native 'git worktree add' { git -C $r.Clone worktree add $r.Worktree main }
+        Invoke-Native 'Setting upstream' { git -C $r.Worktree branch --quiet --set-upstream-to=origin/main main }
     }
 
+    # Repos without server-side branch protection (free private repos) get a local pre-push guard.
+    if ($r.LocalMainGuard -and (Test-Path (Join-Path $r.Clone '.git'))) {
+        if ((git -C $r.Clone config --get core.hooksPath) -eq 'hooks') { Write-Skip 'push guard on main' }
+        elseif ($PSCmdlet.ShouldProcess($r.Clone, 'git config core.hooksPath hooks (blocks pushes to main)')) {
+            Invoke-Native 'Enabling push guard' { git -C $r.Clone config core.hooksPath hooks }
+        }
+    }
+}
+
+# --- 7. Claude Code: sync hook, deny rules, private terms file ---
+Write-Step 'Claude Code'
+if ($repos.Count) {
     $syncSource = Join-Path $root 'files\sync-ai-skills.ps1'
     $needsCopy = -not (Test-Path $claude.SyncScript) -or
         ((Get-FileSha $syncSource) -ne (Get-FileSha $claude.SyncScript))
@@ -159,13 +172,36 @@ if ($ai -and $ai.enabled) {
         Copy-Item $syncSource $claude.SyncScript -Force
     }
 
-    if (Test-SyncHookInstalled) { Write-Skip 'SessionStart hook' }
-    elseif ($PSCmdlet.ShouldProcess($claude.Settings, 'Add SessionStart hook (backup: settings.json.bak)')) {
-        Register-SyncHook -SettingsPath $claude.Settings -SyncScript $claude.SyncScript -Repo $worktree
+    $worktrees = @($repos | ForEach-Object { $_.Worktree })
+    if (Test-SyncHookInstalled -SettingsPath $claude.Settings -RepoPaths $worktrees) { Write-Skip 'SessionStart hook' }
+    elseif ($PSCmdlet.ShouldProcess($claude.Settings, "Set SessionStart hook for $($repos.Count) repo(s) (backup: settings.json.bak)")) {
+        Register-SyncHook -SettingsPath $claude.Settings -SyncScript $claude.SyncScript -Repo $worktrees
     }
 
-    if ((Test-Path $claude.SyncScript) -and (Test-Path $worktree) -and $PSCmdlet.ShouldProcess($claude.Skills, 'Link skills from main')) {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $claude.SyncScript -Repo $worktree | Out-Null
+    $existing = @($worktrees | Where-Object { Test-Path $_ })
+    if ((Test-Path $claude.SyncScript) -and $existing.Count -and $PSCmdlet.ShouldProcess($claude.Skills, 'Link skills from main')) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $claude.SyncScript -Repo ($existing -join ';') | Out-Null
+    }
+}
+
+$claudeCfg = $config.claude
+if ($claudeCfg) {
+    $rules = @($claudeCfg.denyRules)
+    if ($rules.Count) {
+        $missingRules = @(Get-MissingDenyRule -SettingsPath $claude.Settings -Rules $rules)
+        if ($missingRules.Count -eq 0) { Write-Skip 'deny rules' }
+        elseif ($PSCmdlet.ShouldProcess($claude.Settings, "Add $($missingRules.Count) deny rule(s) to permissions.deny (backup: settings.json.bak)")) {
+            Register-DenyRule -SettingsPath $claude.Settings -Rules $missingRules
+        }
+    }
+    if ($claudeCfg.sensitiveTermsFile) {
+        $termsPath = Expand-ConfigPath $claudeCfg.sensitiveTermsFile
+        if (Test-Path $termsPath) { Write-Skip 'private terms file' }
+        elseif ($PSCmdlet.ShouldProcess($termsPath, 'Create private terms file (current user only)')) {
+            $n = New-SensitiveTermsFile -Path $termsPath
+            Write-Host "    created with $n seeded term(s). Add your hostnames, local domain and network names:" -ForegroundColor Yellow
+            Write-Host "    notepad `"$termsPath`"" -ForegroundColor Yellow
+        }
     }
 }
 
