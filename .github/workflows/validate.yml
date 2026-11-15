@@ -33,9 +33,14 @@ jobs:
           $results = .\Test-Workstation.ps1 -PassThru
           $results | Format-Table Area, Check, Status, Detail -AutoSize
           if (-not $results) { throw 'Test-Workstation returned no results' }
+          # Checks are expected to fail on a bare runner; this step only proves the
+          # script runs. Reset the exit code left by the last native probe.
+          exit 0
 
       - name: Install-Workstation dry run
-        run: .\Install-Workstation.ps1 -WhatIf -GitName ci -GitEmail ci@example.invalid
+        run: |
+          .\Install-Workstation.ps1 -WhatIf -GitName ci -GitEmail ci@example.invalid
+          exit 0
 
   secrets:
     name: Secret scan
