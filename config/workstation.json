@@ -1,0 +1,26 @@
+{
+  "codeRoot": "c:\\code",
+
+  "tools": [
+    { "name": "Git",                "command": "git",  "wingetId": "Git.Git" },
+    { "name": "GitHub CLI",         "command": "gh",   "wingetId": "GitHub.cli" },
+    { "name": "Visual Studio Code", "command": "code", "wingetId": "Microsoft.VisualStudioCode" }
+  ],
+
+  "vscodeExtensions": [
+    { "id": "anthropic.claude-code",             "name": "Claude Code",          "required": true },
+    { "id": "github.vscode-pull-request-github", "name": "GitHub Pull Requests", "required": true },
+    { "id": "github.vscode-github-actions",      "name": "GitHub Actions",       "required": false }
+  ],
+
+  "github": {
+    "requiredScopes": ["repo", "workflow", "read:org"]
+  },
+
+  "aiSkills": {
+    "enabled": true,
+    "repo": "jdrodgers/ai-skills",
+    "clonePath": "c:\\code\\ai-skills",
+    "mainWorktreePath": "c:\\code\\ai-skills-main"
+  }
+}

@@ -1,0 +1,49 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  powershell:
+    name: Lint and smoke test
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell   # Windows PowerShell 5.1, the version the scripts target
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Config is valid JSON
+        run: Get-Content -Raw config\workstation.json | ConvertFrom-Json | Out-Null
+
+      - name: PSScriptAnalyzer
+        run: |
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $findings = Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+          $findings | Format-Table ScriptName, Line, RuleName, Message -AutoSize -Wrap
+          if ($findings) { exit 1 }
+
+      - name: Test-Workstation runs without throwing
+        run: |
+          $results = .\Test-Workstation.ps1 -PassThru
+          $results | Format-Table Area, Check, Status, Detail -AutoSize
+          if (-not $results) { throw 'Test-Workstation returned no results' }
+
+      - name: Install-Workstation dry run
+        run: .\Install-Workstation.ps1 -WhatIf -GitName ci -GitEmail ci@example.invalid
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
