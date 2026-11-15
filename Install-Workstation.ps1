@@ -49,6 +49,8 @@ function Get-FileSha([string]$Path) {
 # Runs a native command and throws if it fails (native exit codes don't trigger -ErrorAction).
 function Invoke-Native {
     param([string]$Description, [scriptblock]$Command)
+    # Progress text on stderr (git, winget) must not count as failure; the exit code decides.
+    $ErrorActionPreference = 'Continue'
     & $Command
     if ($LASTEXITCODE -ne 0) { throw "$Description failed (exit code $LASTEXITCODE)" }
 }
@@ -87,8 +89,7 @@ if (Test-CommandExist 'git') {
 Write-Step 'GitHub CLI'
 if (Test-CommandExist 'gh') {
     $scopes = $config.github.requiredScopes
-    gh api user --jq .login 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    if (-not (Test-GhSignedIn)) {
         if ($PSCmdlet.ShouldProcess('github.com', 'gh auth login (opens a browser)')) {
             Invoke-Native 'gh auth login' { gh auth login --hostname github.com --git-protocol https --web --scopes ($scopes -join ',') }
         }
@@ -110,7 +111,7 @@ if (Test-CommandExist 'gh') {
 # --- 4. VS Code extensions ---
 Write-Step 'VS Code extensions'
 if (Test-CommandExist 'code') {
-    $installed = @(code --list-extensions 2>$null | ForEach-Object { $_.ToLowerInvariant() })
+    $installed = Get-VSCodeExtension
     foreach ($ext in $config.vscodeExtensions) {
         if ($installed -contains $ext.id.ToLowerInvariant()) { Write-Skip $ext.name; continue }
         if ($ext.required -eq $false -and $SkipOptionalExtensions) { Write-Skip "$($ext.name) (optional, skipped)"; continue }

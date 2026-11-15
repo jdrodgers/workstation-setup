@@ -43,9 +43,27 @@ function Get-CheckResult {
     [pscustomobject]@{ Area = $Area; Check = $Check; Status = $Status; Detail = $Detail; Fix = $Fix }
 }
 
+# Probes below call native commands that write to stderr when something is missing
+# (e.g. gh signed out). Under $ErrorActionPreference = 'Stop', Windows PowerShell 5.1
+# turns that stderr into a terminating error even with 2>$null, so each probe sets
+# 'Continue' for its own scope and reports failure through $LASTEXITCODE instead.
+
+function Test-GhSignedIn {
+    $ErrorActionPreference = 'Continue'
+    $login = gh api user --jq .login 2>$null
+    if ($LASTEXITCODE -eq 0 -and $login) { return "$login".Trim() }
+    $null
+}
+
+function Get-VSCodeExtension {
+    $ErrorActionPreference = 'Continue'
+    @(code --list-extensions 2>$null | ForEach-Object { $_.ToLowerInvariant() })
+}
+
 # Returns the scopes on the token gh is using, or $null if they can't be read
 # (e.g. fine-grained tokens don't report scopes). Never returns the token itself.
 function Get-GhTokenScope {
+    $ErrorActionPreference = 'Continue'
     $lines = gh api -i user 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
     $scopeLine = $lines | Where-Object { $_ -match '^X-Oauth-Scopes:' } | Select-Object -First 1
@@ -112,6 +130,7 @@ function Register-SyncHook {
 function Get-WorkstationStatus {
     param([Parameter(Mandatory = $true)]$Config)
 
+    $ErrorActionPreference = 'Continue'   # see the note above Test-GhSignedIn
     $results = New-Object System.Collections.Generic.List[object]
     $installHint = 'Run .\Install-Workstation.ps1'
 
@@ -145,8 +164,8 @@ function Get-WorkstationStatus {
 
     # --- GitHub CLI ---
     if ($hasGh) {
-        $login = gh api user --jq .login 2>$null
-        if ($LASTEXITCODE -eq 0 -and $login) {
+        $login = Test-GhSignedIn
+        if ($login) {
             $results.Add((Get-CheckResult 'GitHub' 'Signed in' 'Pass' "as $login"))
             $scopes = Get-GhTokenScope
             if ($null -eq $scopes) {
@@ -163,7 +182,7 @@ function Get-WorkstationStatus {
 
     # --- VS Code extensions ---
     if ($hasCode) {
-        $installed = @(code --list-extensions 2>$null | ForEach-Object { $_.ToLowerInvariant() })
+        $installed = Get-VSCodeExtension
         foreach ($ext in $Config.vscodeExtensions) {
             if ($installed -contains $ext.id.ToLowerInvariant()) {
                 $results.Add((Get-CheckResult 'VS Code' $ext.name 'Pass' $ext.id))
@@ -213,4 +232,4 @@ function Get-WorkstationStatus {
     $results
 }
 
-Export-ModuleMember -Function Get-ClaudePath, Import-WorkstationConfig, Sync-SessionPath, Test-CommandExist, Get-GhTokenScope, Test-SyncHookInstalled, Register-SyncHook, Get-WorkstationStatus
+Export-ModuleMember -Function Get-ClaudePath, Import-WorkstationConfig, Sync-SessionPath, Test-CommandExist, Get-GhTokenScope, Test-SyncHookInstalled, Register-SyncHook, Test-GhSignedIn, Get-VSCodeExtension, Get-WorkstationStatus
