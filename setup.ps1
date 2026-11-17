@@ -22,7 +22,7 @@ if (-not $Arguments) { $Arguments = @('install') }
 $dryRun = ($Arguments -contains '--dry-run') -or ($Arguments[0] -eq 'check')
 
 # winget updates the registry PATH, not this session's.
-function Update-SessionPath {
+function Sync-SessionPath {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
@@ -48,7 +48,7 @@ function Install-Package([string]$Name, [string]$Id) {
     Write-Host "==> Installing $Name"
     winget install --id $Id --exact --silent --accept-source-agreements --accept-package-agreements
     if ($LASTEXITCODE -ne 0) { throw "winget install $Id failed (exit code $LASTEXITCODE)" }
-    Update-SessionPath
+    Sync-SessionPath
 }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Install-Package 'Git' 'Git.Git' }

@@ -36,8 +36,9 @@ if [ -n "$need" ]; then
     case "$(uname -s)" in
       Darwin)
         if command -v brew >/dev/null 2>&1; then
+          pkgs=$(echo "$need" | sed 's/python3/python/')  # Homebrew calls it "python"
           # shellcheck disable=SC2086  # word splitting of the package list is intended
-          brew install $(echo "$need" | sed 's/python3/python/')
+          brew install $pkgs
         else
           echo "==> Installing the Xcode Command Line Tools (git, python3). Finish the dialog, then re-run ./setup.sh"
           xcode-select --install || true

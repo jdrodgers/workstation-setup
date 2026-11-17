@@ -18,8 +18,10 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
         # 3.9 is the oldest supported (the python3 in macOS Command Line Tools).
         python: ["3.9", "3.13"]
-        exclude:
-          - os: macos-latest   # no 3.9 build for Apple-silicon runners; covered on Linux and Windows
+        exclude:   # setup-python has no 3.9 build for these runner images; 3.9 is covered on Windows
+          - os: macos-latest
+            python: "3.9"
+          - os: ubuntu-latest
             python: "3.9"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
