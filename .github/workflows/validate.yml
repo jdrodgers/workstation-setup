@@ -70,6 +70,19 @@ jobs:
         shell: powershell
         run: .\setup.ps1 install --dry-run --git-name ci --git-email ci@example.invalid
 
+  # The one check the main ruleset requires (with "Secret scan"). It passes only when every
+  # matrix job above passed, so the ruleset doesn't need to change when the matrix does.
+  required:
+    name: Lint and smoke test
+    if: always()
+    needs: [python, bootstrap]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All test jobs passed
+        run: |
+          echo "python: ${{ needs.python.result }}, bootstrap: ${{ needs.bootstrap.result }}"
+          test "${{ needs.python.result }}" = success && test "${{ needs.bootstrap.result }}" = success
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
