@@ -1,0 +1,11 @@
+# Tool settings only; the package runs from the repo root with `python -m workstation`.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "D"]
+ignore = ["D401", "D203", "D213", "D105", "D107", "UP007"]

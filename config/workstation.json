@@ -1,10 +1,19 @@
 {
-  "codeRoot": "c:\\code",
+  "codeRoot": "~/code",
 
   "tools": [
-    { "name": "Git",                "command": "git",  "wingetId": "Git.Git" },
-    { "name": "GitHub CLI",         "command": "gh",   "wingetId": "GitHub.cli" },
-    { "name": "Visual Studio Code", "command": "code", "wingetId": "Microsoft.VisualStudioCode" }
+    {
+      "name": "Git", "command": "git",
+      "install": { "winget": "Git.Git", "brew": "git", "apt": "git", "dnf": "git" }
+    },
+    {
+      "name": "GitHub CLI", "command": "gh",
+      "install": { "winget": "GitHub.cli", "brew": "gh", "apt": "gh", "dnf": "gh" }
+    },
+    {
+      "name": "Visual Studio Code", "command": "code",
+      "install": { "winget": "Microsoft.VisualStudioCode", "brewCask": "visual-studio-code", "snap": "code --classic" }
+    }
   ],
 
   "vscodeExtensions": [
@@ -21,21 +30,22 @@
     {
       "name": "ai-skills",
       "repo": "jdrodgers/ai-skills",
-      "clonePath": "c:\\code\\ai-skills",
-      "mainWorktreePath": "c:\\code\\ai-skills-main",
+      "clonePath": "ai-skills",
+      "mainWorktreePath": "ai-skills-main",
       "localMainGuard": false
     },
     {
       "name": "ai-skills-private",
       "repo": "jdrodgers/ai-skills-private",
-      "clonePath": "c:\\code\\ai-skills-private",
-      "mainWorktreePath": "c:\\code\\ai-skills-private-main",
+      "clonePath": "ai-skills-private",
+      "mainWorktreePath": "ai-skills-private-main",
       "localMainGuard": true
     }
   ],
 
   "claude": {
-    "sensitiveTermsFile": "%USERPROFILE%\\.config\\ai-skills\\sensitive-terms.txt",
+    "globalInstructions": { "repo": "ai-skills", "path": "claude/CLAUDE.md" },
+    "sensitiveTermsFile": "~/.config/ai-skills/sensitive-terms.txt",
     "denyRules": [
       "Read(~/.ssh/**)",
       "Read(~/.aws/**)",

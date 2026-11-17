@@ -1,0 +1,3 @@
+# Tools used by CI and for local checks. Pinned; Dependabot proposes updates.
+pytest==8.3.4
+ruff==0.8.4

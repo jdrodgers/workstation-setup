@@ -9,38 +9,79 @@ permissions:
   contents: read
 
 jobs:
-  powershell:
-    name: Lint and smoke test
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: powershell   # Windows PowerShell 5.1, the version the scripts target
+  python:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        # 3.9 is the oldest supported (the python3 in macOS Command Line Tools).
+        python: ["3.9", "3.13"]
+        exclude:   # setup-python has no 3.9 build for these runner images; 3.9 is covered on Windows
+          - os: macos-latest
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.9"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Lint
+        run: python -m ruff check .
+      - name: Unit tests
+        run: python -m pytest -q
       - name: Config is valid JSON
-        run: Get-Content -Raw config\workstation.json | ConvertFrom-Json | Out-Null
+        run: python -c "import json; json.load(open('config/workstation.json'))"
+      - name: check runs without crashing
+        # Checks are expected to fail on a bare runner; this only proves the code runs.
+        shell: bash
+        run: python -m workstation check --json > results.json || true; python -c "import json; assert json.load(open('results.json'))"
+      - name: install dry run
+        run: python -m workstation install --dry-run --git-name ci --git-email ci@example.invalid
 
-      - name: PSScriptAnalyzer
+  bootstrap:
+    name: Bootstrap scripts
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shellcheck setup.sh
+        if: runner.os == 'Linux'
+        run: shellcheck setup.sh
+      - name: setup.sh dry run
+        if: runner.os == 'Linux'
+        run: sh setup.sh install --dry-run --git-name ci --git-email ci@example.invalid
+      - name: PSScriptAnalyzer on setup.ps1
+        if: runner.os == 'Windows'
+        shell: powershell   # Windows PowerShell 5.1, which setup.ps1 targets
         run: |
-          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
-          $findings = Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
-          $findings | Format-Table ScriptName, Line, RuleName, Message -AutoSize -Wrap
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.23.0 -Scope CurrentUser -Force
+          $findings = Invoke-ScriptAnalyzer -Path .\setup.ps1 -Settings .\PSScriptAnalyzerSettings.psd1
+          $findings | Format-Table Line, RuleName, Message -AutoSize -Wrap
           if ($findings) { exit 1 }
+      - name: setup.ps1 dry run
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\setup.ps1 install --dry-run --git-name ci --git-email ci@example.invalid
 
-      - name: Test-Workstation runs without throwing
+  # The one check the main ruleset requires (with "Secret scan"). It passes only when every
+  # matrix job above passed, so the ruleset doesn't need to change when the matrix does.
+  required:
+    name: Lint and smoke test
+    if: always()
+    needs: [python, bootstrap]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All test jobs passed
         run: |
-          $results = .\Test-Workstation.ps1 -PassThru
-          $results | Format-Table Area, Check, Status, Detail -AutoSize
-          if (-not $results) { throw 'Test-Workstation returned no results' }
-          # Checks are expected to fail on a bare runner; this step only proves the
-          # script runs. Reset the exit code left by the last native probe.
-          exit 0
-
-      - name: Install-Workstation dry run
-        run: |
-          .\Install-Workstation.ps1 -WhatIf -GitName ci -GitEmail ci@example.invalid
-          exit 0
+          echo "python: ${{ needs.python.result }}, bootstrap: ${{ needs.bootstrap.result }}"
+          test "${{ needs.python.result }}" = success && test "${{ needs.bootstrap.result }}" = success
 
   secrets:
     name: Secret scan
@@ -49,7 +90,7 @@ jobs:
       contents: read
       pull-requests: read   # gitleaks lists the PR's commits; needed on private repos
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
